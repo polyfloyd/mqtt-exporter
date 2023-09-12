@@ -5,6 +5,7 @@ import re
 import paho.mqtt.client as mqtt
 from prometheus_client import Gauge, start_http_server
 import logging
+import sys
 
 
 class Mapping:
@@ -60,7 +61,7 @@ class Mapping:
         prom_metric.labels(**label_values).set(set_value)
 
 
-with open('config.yaml') as file:
+with open(sys.argv[1]) as file:
     config = yaml.load(file, Loader=yaml.Loader)
 
 mqtt_host = config['mqtt']['host']
