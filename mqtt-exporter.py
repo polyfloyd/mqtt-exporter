@@ -96,9 +96,14 @@ def on_connect(client, userdata, flags, rc):
         client.subscribe(m.topic)
 
 def on_message(client, userdata, msg):
+    try:
+        payload = msg.payload.decode()
+    except:
+        logging.debug('non utf-8 message: %s -> "%s"', msg.topic, msg.payload)
+        return
     for mapping in mappings:
         if mapping.match_topic(msg.topic):
-            mapping.ingest(msg.topic, msg.payload.decode())
+            mapping.ingest(msg.topic, payload)
             break
 
 def main():
