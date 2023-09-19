@@ -38,6 +38,7 @@ class Mapping:
             label_values[label] = parts[i]
 
         metric = '_'.join(p for (i, p) in enumerate(parts) if i not in label_indices)
+        metric = metric.replace('-', '_').lower()
         prom_metric = self._metrics.get(metric)
         if not prom_metric:
             labels = list(label_values.keys())
@@ -58,7 +59,9 @@ class Mapping:
             self._enum_prev_values.add(payload)
 
         logging.debug('%s %s %s', metric, label_values, set_value)
-        prom_metric.labels(**label_values).set(set_value)
+        if label_values:
+            prom_metric = prom_metric.labels(**label_values)
+        prom_metric.set(set_value)
 
 
 with open(sys.argv[1]) as file:
