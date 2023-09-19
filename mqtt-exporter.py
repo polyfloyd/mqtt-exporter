@@ -9,10 +9,18 @@ import sys
 
 
 class Mapping:
-    def __init__(self, topic, labels):
+    def __init__(self, topic, labels, value_map):
         self.topic = topic
         self.labels = labels
-        self._re_match_topic = re.compile('^'+topic.replace('+', '[^\/]+').rstrip('#'))
+        self.value_map = value_map or {}
+
+        r = '^' + topic.replace('+', '[^\/]+')
+        if topic[-1] not in ['+', '#']:
+            r += '$'
+        else:
+            r = r.rstrip('#')
+        self._re_match_topic = re.compile(r)
+
         self._metrics = {}
         self._enum_prev_values = set()
 
@@ -47,7 +55,11 @@ class Mapping:
 
         if value_mode == 'number':
             try:
-                set_value = float(payload.split(' ')[0].strip())
+                remap = self.value_map.get(payload.strip())
+                if remap:
+                    set_value = float(remap)
+                else:
+                    set_value = float(payload.split(' ')[0].strip())
             except:
                 logging.debug('invalid value: %s -> "%s"', topic, payload)
                 return
@@ -86,7 +98,7 @@ for export in config['export']:
         label_mapping.append((k,v))
 
     topic = re_topic_labels.sub('+', subscribe)
-    mappings.append(Mapping(topic, label_mapping))
+    mappings.append(Mapping(topic, label_mapping, export.get('value_map')))
 
 # Sort to have longer paths take precedence.
 mappings.sort(key=lambda m: m.precedence(), reverse=True)
