@@ -47,8 +47,8 @@ class Mapping:
         if value_mode == 'number':
             try:
                 set_value = float(payload.split(' ')[0].strip())
-                logging.debug('invalid value: %s -> %s', topic, payload)
             except:
+                logging.debug('invalid value: %s -> "%s"', topic, payload)
                 return
         elif value_mode == 'enum':
             set_value = 1
