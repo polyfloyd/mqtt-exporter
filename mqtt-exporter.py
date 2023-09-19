@@ -12,7 +12,7 @@ class Mapping:
     def __init__(self, topic, labels):
         self.topic = topic
         self.labels = labels
-        self._re_match_topic = re.compile('^'+topic.replace('+', '\w+').rstrip('#'))
+        self._re_match_topic = re.compile('^'+topic.replace('+', '[^\/]+').rstrip('#'))
         self._metrics = {}
         self._enum_prev_values = set()
 
@@ -108,6 +108,8 @@ def on_message(client, userdata, msg):
         if mapping.match_topic(msg.topic):
             mapping.ingest(msg.topic, payload)
             break
+        else:
+            logging.debug('unmatched topic: %s', msg.topic)
 
 def main():
     logging.basicConfig(level=logging.INFO)
