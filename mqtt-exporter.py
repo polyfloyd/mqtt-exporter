@@ -75,9 +75,10 @@ class Mapping:
             label_indices.add(i)
             label_values[label] = parts[i]
 
-        metric = '_'.join(p for (i, p) in enumerate(parts) if i not in label_indices)
-        metric = metric.replace('-', '_').lower()
+        metric_name = '_'.join(p for (i, p) in enumerate(parts) if i not in label_indices) \
+            .replace('-', '_').lower()
 
+        metrics = []
         if value_mode == 'number':
             try:
                 remap = self.value_map.get(payload.strip())
@@ -87,31 +88,29 @@ class Mapping:
                     set_value = float(payload.split(' ')[0].strip())
             except:
                 logging.debug('invalid value: %s -> "%s"', topic, payload)
-                return None
+                return []
         elif value_mode == 'enum':
-            set_value = 1
+            set_value = 1.0
             for v in self._enum_prev_values:
                 enum_label = next(label for (label, i) in self.labels if i == 'enum')
-                prom_metric.labels(**{**label_values, enum_label: v}).set(0)
+                metrics.append(Metric(metric_name, {**label_values, enum_label: v}, 0.0))
             self._enum_prev_values.add(payload)
 
-        return Metric(metric, label_values, set_value)
+        metrics.append(Metric(metric_name, label_values, set_value))
+        return metrics
 
     def ingest(self, topic, payload):
-        m = self.interpret(topic, payload)
-        if not m:
-            return
+        for m in self.interpret(topic, payload):
+            prom_metric = self._metrics.get(m.metric_name)
+            if not prom_metric:
+                labels = list(m.label_values.keys())
+                prom_metric = Gauge(m.metric_name, '', labels)
+                self._metrics[m.metric_name] = prom_metric
 
-        prom_metric = self._metrics.get(m.metric_name)
-        if not prom_metric:
-            labels = list(m.label_values.keys())
-            prom_metric = Gauge(m.metric_name, '', labels)
-            self._metrics[m.metric_name] = prom_metric
-
-        logging.debug('%s %s %s', m.metric_name, m.label_values, m.value)
-        if m.label_values:
-            prom_metric = prom_metric.labels(**m.label_values)
-        prom_metric.set(m.value)
+            logging.debug('%s %s %s', m.metric_name, m.label_values, m.value)
+            if m.label_values:
+                prom_metric = prom_metric.labels(**m.label_values)
+            prom_metric.set(m.value)
 
 
 #
@@ -121,24 +120,27 @@ m1 = Mapping(subscribe='sensors/#')
 assert m1.topic == 'sensors/#'
 assert not m1.match_topic('sensors')
 assert m1.match_topic('sensors/foo')
-assert m1.interpret('sensors/foo', '12') == Metric('sensors_foo', {}, 12.0)
+assert m1.interpret('sensors/foo', '12') == [Metric('sensors_foo', {}, 12.0)]
 
 m2 = Mapping(subscribe='sensors/+location/#')
 assert m2.topic == 'sensors/+/#'
 assert m2.match_topic('sensors/foo/temperature')
 assert m2.interpret('sensors/foo/temperature', '12') \
-    == Metric('sensors_temperature', {'location': 'foo'}, 12.0)
+    == [Metric('sensors_temperature', {'location': 'foo'}, 12.0)]
 
 m3 = Mapping(subscribe='sensors/+location/version', labels={'version': 'enum'})
 assert m3.topic == 'sensors/+/version'
 assert m3.match_topic('sensors/foo/version')
 assert not m3.match_topic('sensors/foo/version/bar')
 assert m3.interpret('sensors/foo/version', 'asdf') \
-    == Metric('sensors_version', {'location': 'foo', 'version': 'asdf'}, 1.0)
+    == [Metric('sensors_version', {'location': 'foo', 'version': 'asdf'}, 1.0)]
+assert m3.interpret('sensors/foo/version', 'qwer') \
+    == [Metric('sensors_version', {'location': 'foo', 'version': 'asdf'}, 0.0),
+        Metric('sensors_version', {'location': 'foo', 'version': 'qwer'}, 1.0)]
 
 m4 = Mapping(subscribe='bitlair/state', value_map={'open': 1.0, 'closed': 0.0})
-assert m4.interpret('bitlair/state', 'open') == Metric('bitlair_state', {}, 1.0)
-assert m4.interpret('bitlair/state', 'closed') == Metric('bitlair_state', {}, 0.0)
+assert m4.interpret('bitlair/state', 'open') == [Metric('bitlair_state', {}, 1.0)]
+assert m4.interpret('bitlair/state', 'closed') == [Metric('bitlair_state', {}, 0.0)]
 
 
 with open(sys.argv[1]) as file:
