@@ -3,7 +3,7 @@
 import yaml
 import re
 import paho.mqtt.client as mqtt
-from prometheus_client import Gauge, start_http_server
+from prometheus_client import Counter, Gauge, start_http_server
 import logging
 import sys
 
@@ -24,8 +24,9 @@ class Metric:
 
 
 class Mapping:
-    def __init__(self, *, subscribe, labels={}, value_map={}):
+    def __init__(self, *, subscribe, metric_type='gauge', labels={}, value_map={}):
         assert '#' not in subscribe or subscribe.index('#') == len(subscribe)-1
+        assert metric_type in {'counter', 'gauge'}
 
         re_topic_labels = re.compile(r'\+(\w+)')
 
@@ -41,6 +42,7 @@ class Mapping:
         topic = re_topic_labels.sub('+', subscribe)
 
         self.topic = topic
+        self.type = metric_type
         self.labels = label_mapping
         self.value_map = value_map
 
@@ -91,10 +93,11 @@ class Mapping:
                 return []
         elif value_mode == 'enum':
             set_value = 1.0
-            for v in self._enum_prev_values:
-                enum_label = next(label for (label, i) in self.labels if i == 'enum')
-                metrics.append(Metric(metric_name, {**label_values, enum_label: v}, 0.0))
-            self._enum_prev_values.add(payload)
+            if self.type == 'gauge':
+                for v in self._enum_prev_values:
+                    enum_label = next(label for (label, i) in self.labels if i == 'enum')
+                    metrics.append(Metric(metric_name, {**label_values, enum_label: v}, 0.0))
+                self._enum_prev_values.add(payload)
 
         metrics.append(Metric(metric_name, label_values, set_value))
         return metrics
@@ -104,12 +107,19 @@ class Mapping:
             prom_metric = self._metrics.get(m.metric_name)
             if not prom_metric:
                 labels = list(m.label_values.keys())
-                prom_metric = Gauge(m.metric_name, '', labels)
+                if self.type == 'counter':
+                    prom_metric = Counter(m.metric_name, '', labels)
+                else:
+                    prom_metric = Gauge(m.metric_name, '', labels)
                 self._metrics[m.metric_name] = prom_metric
 
             logging.debug('%s %s %s', m.metric_name, m.label_values, m.value)
             if m.label_values:
                 prom_metric = prom_metric.labels(**m.label_values)
+
+        if self.type == 'counter':
+            prom_metric.inc(m.value)
+        else:
             prom_metric.set(m.value)
 
 
@@ -141,6 +151,10 @@ assert m3.interpret('sensors/foo/version', 'qwer') \
 m4 = Mapping(subscribe='bitlair/state', value_map={'open': 1.0, 'closed': 0.0})
 assert m4.interpret('bitlair/state', 'open') == [Metric('bitlair_state', {}, 1.0)]
 assert m4.interpret('bitlair/state', 'closed') == [Metric('bitlair_state', {}, 0.0)]
+
+m5 = Mapping(subscribe='bitlair/pos/product', metric_type='counter', labels={'product': 'enum'})
+assert m5.interpret('bitlair/pos/product', 'Tosti') == [Metric('bitlair_pos_product', {'product': 'Tosti'}, 1.0)]
+assert m5.interpret('bitlair/pos/product', 'Tosti') == [Metric('bitlair_pos_product', {'product': 'Tosti'}, 1.0)]
 
 
 with open(sys.argv[1]) as file:
