@@ -6,6 +6,7 @@ import paho.mqtt.client as mqtt
 from prometheus_client import Counter, Gauge, start_http_server
 import logging
 import sys
+import math
 
 
 class Metric:
@@ -24,7 +25,8 @@ class Metric:
 
 
 class Mapping:
-    def __init__(self, *, subscribe, metric_type='gauge', labels={}, value_map={}):
+    def __init__(self, *, subscribe, metric_name=None, metric_type='gauge', labels={}, value_map={},
+                 value_regex='^(.*)$'):
         assert '#' not in subscribe or subscribe.index('#') == len(subscribe)-1
         assert metric_type in {'counter', 'gauge'}
 
@@ -53,6 +55,8 @@ class Mapping:
             r = r.rstrip('#')
         self._re_match_topic = re.compile(r)
 
+        self._value_regex = re.compile(value_regex)
+        self._metric_name = metric_name
         self._metrics = {}
         self._enum_prev_values = set()
 
@@ -66,6 +70,8 @@ class Mapping:
     def interpret(self, topic, payload):
         parts = topic.split('/')
 
+        payload = self._value_regex.match(payload)[1]
+
         value_mode = 'number'
         label_values = {}
         label_indices = set()
@@ -77,8 +83,10 @@ class Mapping:
             label_indices.add(i)
             label_values[label] = parts[i]
 
-        metric_name = '_'.join(p for (i, p) in enumerate(parts) if i not in label_indices) \
-            .replace('-', '_').lower()
+        metric_name = self._metric_name
+        if not metric_name:
+            metric_name = '_'.join(p for (i, p) in enumerate(parts) if i not in label_indices) \
+                .replace('-', '_').lower()
 
         metrics = []
         if value_mode == 'number':
@@ -117,10 +125,10 @@ class Mapping:
             if m.label_values:
                 prom_metric = prom_metric.labels(**m.label_values)
 
-        if self.type == 'counter':
-            prom_metric.inc(m.value)
-        else:
-            prom_metric.set(m.value)
+            if self.type == 'counter':
+                prom_metric.inc(m.value)
+            else:
+                prom_metric.set(m.value)
 
 
 #
@@ -156,6 +164,10 @@ m5 = Mapping(subscribe='bitlair/pos/product', metric_type='counter', labels={'pr
 assert m5.interpret('bitlair/pos/product', 'Tosti') == [Metric('bitlair_pos_product', {'product': 'Tosti'}, 1.0)]
 assert m5.interpret('bitlair/pos/product', 'Tosti') == [Metric('bitlair_pos_product', {'product': 'Tosti'}, 1.0)]
 
+m6 = Mapping(subscribe='bitlair/snmp/tx', value_regex='^.+:(.+):.+')
+m6.interpret('bitlair/snmp/tx', '1695557017:720167:29751') \
+    == [Metric('bitlair_snmp_tx', {}, 720167.0)]
+
 
 with open(sys.argv[1]) as file:
     config = yaml.load(file, Loader=yaml.Loader)
@@ -180,10 +192,14 @@ def on_message(client, userdata, msg):
     except:
         logging.debug('non utf-8 message: %s -> "%s"', msg.topic, msg.payload)
         return
+    prev_precedence = math.inf
     for mapping in mappings:
         if mapping.match_topic(msg.topic):
             mapping.ingest(msg.topic, payload)
-            break
+            precedence = mapping.precedence()
+            if prev_precedence < precedence:
+                break
+            prev_precedence = precedence
         else:
             logging.debug('unmatched topic: %s', msg.topic)
 
