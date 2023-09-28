@@ -195,16 +195,18 @@ def on_message(client, userdata, msg):
     except:
         logging.debug('non utf-8 message: %s -> "%s"', msg.topic, msg.payload)
         return
-    prev_precedence = math.inf
+    prev_precedence = -math.inf
+    matched = False
     for mapping in mappings:
         if mapping.match_topic(msg.topic):
-            mapping.ingest(msg.topic, payload)
             precedence = mapping.precedence()
-            if prev_precedence < precedence:
+            if prev_precedence > precedence:
                 break
+            matched = True
+            mapping.ingest(msg.topic, payload)
             prev_precedence = precedence
-        else:
-            logging.debug('unmatched topic: %s', msg.topic)
+    if not matched:
+        logging.debug('unmatched topic: %s', msg.topic)
 
 def main():
     logging.basicConfig(level=logging.INFO)
