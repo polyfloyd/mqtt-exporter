@@ -28,7 +28,7 @@ class Mapping:
     def __init__(self, *, subscribe, metric_name=None, metric_type='gauge', labels={}, value_map={},
                  value_regex='^(.*)$'):
         assert '#' not in subscribe or subscribe.index('#') == len(subscribe)-1
-        assert metric_type in {'counter', 'gauge'}
+        assert metric_type in {'counter', 'gauge', None}
 
         re_topic_labels = re.compile(r'\+(\w+)')
 
@@ -68,6 +68,9 @@ class Mapping:
         return len(self.topic.split('/')) + (0 if self.topic[-1] == '#' else 0.5)
 
     def interpret(self, topic, payload):
+        if self.type is None:
+            return []
+
         parts = topic.split('/')
 
         payload = self._value_regex.match(payload)[1]
