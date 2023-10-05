@@ -172,44 +172,43 @@ m6.interpret('bitlair/snmp/tx', '1695557017:720167:29751') \
     == [Metric('bitlair_snmp_tx', {}, 720167.0)]
 
 
-with open(sys.argv[1]) as file:
-    config = yaml.load(file, Loader=yaml.Loader)
-
-mqtt_host = config['mqtt']['host']
-mqtt_port = config['mqtt']['port']
-
-mappings = [Mapping(**export) for export in config['export']]
-# Sort to have longer paths take precedence.
-mappings.sort(key=lambda m: m.precedence(), reverse=True)
-
-
-def on_connect(client, userdata, flags, rc):
-    logging.info('mqtt connected')
-    for m in mappings:
-        logging.info('subscribing to %s' % m.topic)
-        client.subscribe(m.topic)
-
-def on_message(client, userdata, msg):
-    try:
-        payload = msg.payload.decode()
-    except:
-        logging.debug('non utf-8 message: %s -> "%s"', msg.topic, msg.payload)
-        return
-    prev_precedence = -math.inf
-    matched = False
-    for mapping in mappings:
-        if mapping.match_topic(msg.topic):
-            precedence = mapping.precedence()
-            if prev_precedence > precedence:
-                break
-            matched = True
-            mapping.ingest(msg.topic, payload)
-            prev_precedence = precedence
-    if not matched:
-        logging.debug('unmatched topic: %s', msg.topic)
-
 def main():
-    logging.basicConfig(level=logging.INFO)
+    with open(sys.argv[1]) as file:
+        config = yaml.load(file, Loader=yaml.Loader)
+
+    logging.basicConfig(level=config.get('log_level', 'INFO'))
+
+    mqtt_host = config['mqtt']['host']
+    mqtt_port = config['mqtt']['port']
+
+    mappings = [Mapping(**export) for export in config['export']]
+    # Sort to have longer paths take precedence.
+    mappings.sort(key=lambda m: m.precedence(), reverse=True)
+
+    def on_connect(client, userdata, flags, rc):
+        logging.info('mqtt connected')
+        for m in mappings:
+            logging.info('subscribing to %s' % m.topic)
+            client.subscribe(m.topic)
+
+    def on_message(client, userdata, msg):
+        try:
+            payload = msg.payload.decode()
+        except:
+            logging.debug('non utf-8 message: %s -> "%s"', msg.topic, msg.payload)
+            return
+        prev_precedence = -math.inf
+        matched = False
+        for mapping in mappings:
+            if mapping.match_topic(msg.topic):
+                precedence = mapping.precedence()
+                if prev_precedence > precedence:
+                    break
+                matched = True
+                mapping.ingest(msg.topic, payload)
+                prev_precedence = precedence
+        if not matched:
+            logging.debug('unmatched topic: %s', msg.topic)
 
     prometheus_port = config['prometheus']['port']
     start_http_server(prometheus_port)
