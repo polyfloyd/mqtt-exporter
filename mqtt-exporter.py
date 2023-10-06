@@ -134,6 +134,29 @@ class Mapping:
                 prom_metric.set(m.value)
 
 
+class Router:
+    def __init__(self, mappings):
+        # Sort to have longer paths take precedence.
+        mappings.sort(key=lambda m: m.precedence(), reverse=True)
+        self.mappings = mappings
+
+    def route(self, topic):
+        mappings = []
+
+        prev_precedence = -math.inf
+        matched = False
+        for mapping in self.mappings:
+            if mapping.match_topic(topic):
+                precedence = mapping.precedence()
+                if prev_precedence > precedence:
+                    break
+                matched = True
+                mappings.append(mapping)
+                prev_precedence = precedence
+
+        return mappings
+
+
 #
 # Unit Tests
 #
@@ -171,6 +194,11 @@ m6 = Mapping(subscribe='bitlair/snmp/tx', value_regex='^.+:(.+):.+')
 m6.interpret('bitlair/snmp/tx', '1695557017:720167:29751') \
     == [Metric('bitlair_snmp_tx', {}, 720167.0)]
 
+topics = lambda mm: [m.topic for m in mm]
+r1 = Router([m1, m3])
+assert topics(r1.route('sensors/bar')) == ['sensors/#']
+assert topics(r1.route('sensors/foo/version')) == ['sensors/+/version']
+
 
 def main():
     with open(sys.argv[1]) as file:
@@ -182,8 +210,7 @@ def main():
     mqtt_port = config['mqtt']['port']
 
     mappings = [Mapping(**export) for export in config['export']]
-    # Sort to have longer paths take precedence.
-    mappings.sort(key=lambda m: m.precedence(), reverse=True)
+    router = Router(mappings)
 
     def on_connect(client, userdata, flags, rc):
         logging.info('mqtt connected')
@@ -197,17 +224,10 @@ def main():
         except:
             logging.debug('non utf-8 message: %s -> "%s"', msg.topic, msg.payload)
             return
-        prev_precedence = -math.inf
-        matched = False
-        for mapping in mappings:
-            if mapping.match_topic(msg.topic):
-                precedence = mapping.precedence()
-                if prev_precedence > precedence:
-                    break
-                matched = True
-                mapping.ingest(msg.topic, payload)
-                prev_precedence = precedence
-        if not matched:
+        routed_mappings = router.route(msg.topic)
+        for m in routed_mappings:
+            m.ingest(msg.topic, payload)
+        if len(routed_mappings) == 0:
             logging.debug('unmatched topic: %s', msg.topic)
 
     prometheus_port = config['prometheus']['port']
