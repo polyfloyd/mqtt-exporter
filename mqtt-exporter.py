@@ -3,14 +3,15 @@
 import yaml
 import re
 import paho.mqtt.client as mqtt
-from prometheus_client import Counter, Gauge, start_http_server
+from prometheus_client import Counter, Info, Gauge, Enum, start_http_server
 import logging
 import sys
 import math
 
 
 class Metric:
-    def __init__(self, metric_name, label_values, value):
+    def __init__(self, metric_type, metric_name, label_values, value):
+        self.metric_type = metric_type
         self.metric_name = metric_name
         self.label_values = label_values
         self.value = value
@@ -25,10 +26,14 @@ class Metric:
 
 
 class Mapping:
-    def __init__(self, *, subscribe, metric_name=None, metric_type='gauge', labels={}, value_map={},
-                 value_regex='^(.*)$'):
+    def __init__(self, *, subscribe, metric_name=None, metric_type='gauge', labels={},
+                 value_regex='^(.*)$', enum_states=[], info_name='value'):
         assert '#' not in subscribe or subscribe.index('#') == len(subscribe)-1
-        assert metric_type in {'counter', 'gauge', None}
+        assert metric_type in {'counter', 'enum', 'info', 'gauge', None}
+        assert not ('payload' in labels.values() and metric_type in ['gauge', 'info', 'enum'])
+        assert (metric_type == 'enum') == (len(enum_states) > 0)
+        assert metric_type != 'info' or info_name
+        assert set(labels.values()) - {'payload'} == set()
 
         re_topic_labels = re.compile(r'\+(\w+)')
 
@@ -46,7 +51,8 @@ class Mapping:
         self.topic = topic
         self.type = metric_type
         self.labels = label_mapping
-        self.value_map = value_map
+        self.enum_states = enum_states
+        self.info_name = info_name
 
         r = '^' + topic.replace('+', '[^\/]+')
         if topic[-1] not in ['+', '#']:
@@ -58,7 +64,6 @@ class Mapping:
         self._value_regex = re.compile(value_regex)
         self._metric_name = metric_name
         self._metrics = {}
-        self._enum_prev_values = set()
 
     def match_topic(self, topic):
         return self._re_match_topic.match(topic)
@@ -69,7 +74,7 @@ class Mapping:
 
     def interpret(self, topic, payload):
         if self.type is None:
-            return []
+            return None
 
         parts = topic.split('/')
 
@@ -78,11 +83,15 @@ class Mapping:
         value_mode = 'number'
         label_values = {}
         label_indices = set()
+        if self.type in ['enum', 'info']:
+            value_mode = 'string'
+        is_payload_label = False
         for (label, i) in self.labels:
-            if i == 'enum':
-                value_mode = 'enum'
+            if i == 'payload':
+                is_payload_label = True
                 label_values[label] = payload
-                break
+                value_mode = 'string'
+                continue
             label_indices.add(i)
             label_values[label] = parts[i]
 
@@ -91,47 +100,50 @@ class Mapping:
             metric_name = '_'.join(p for (i, p) in enumerate(parts) if i not in label_indices) \
                 .replace('-', '_').lower()
 
-        metrics = []
-        if value_mode == 'number':
+        set_value = payload
+        if is_payload_label:
+            set_value = 1.0
+        elif value_mode == 'number':
             try:
-                remap = self.value_map.get(payload.strip())
-                if remap is not None:
-                    set_value = float(remap)
-                else:
-                    set_value = float(payload.split(' ')[0].strip())
+                set_value = float(payload.split(' ')[0].strip())
             except:
                 logging.debug('invalid value: %s -> "%s"', topic, payload)
-                return []
-        elif value_mode == 'enum':
-            set_value = 1.0
-            if self.type == 'gauge':
-                for v in self._enum_prev_values:
-                    enum_label = next(label for (label, i) in self.labels if i == 'enum')
-                    metrics.append(Metric(metric_name, {**label_values, enum_label: v}, 0.0))
-                self._enum_prev_values.add(payload)
+                return None
+        elif value_mode == 'string':
+            set_value = payload
 
-        metrics.append(Metric(metric_name, label_values, set_value))
-        return metrics
+        return Metric(self.type, metric_name, label_values, set_value)
 
     def ingest(self, topic, payload):
-        for m in self.interpret(topic, payload):
-            prom_metric = self._metrics.get(m.metric_name)
-            if not prom_metric:
-                labels = list(m.label_values.keys())
-                if self.type == 'counter':
-                    prom_metric = Counter(m.metric_name, '', labels)
-                else:
-                    prom_metric = Gauge(m.metric_name, '', labels)
-                self._metrics[m.metric_name] = prom_metric
+        m = self.interpret(topic, payload)
+        if not m:
+            return
 
-            logging.debug('%s %s %s', m.metric_name, m.label_values, m.value)
-            if m.label_values:
-                prom_metric = prom_metric.labels(**m.label_values)
-
+        prom_metric = self._metrics.get(m.metric_name)
+        if not prom_metric:
+            labels = list(m.label_values.keys())
             if self.type == 'counter':
-                prom_metric.inc(m.value)
-            else:
-                prom_metric.set(m.value)
+                prom_metric = Counter(m.metric_name, '', labels)
+            elif self.type == 'info':
+                prom_metric = Info(m.metric_name, '', labels)
+            elif self.type == 'enum':
+                prom_metric = Enum(m.metric_name, '', labels, states=self.enum_states)
+            elif self.type == 'gauge':
+                prom_metric = Gauge(m.metric_name, '', labels)
+            self._metrics[m.metric_name] = prom_metric
+
+        logging.debug('%s %s %s', m.metric_name, m.label_values, m.value)
+        if m.label_values:
+            prom_metric = prom_metric.labels(**m.label_values)
+
+        if self.type == 'counter':
+            prom_metric.inc(m.value)
+        elif self.type == 'info':
+            prom_metric.info({self.info_name: m.value})
+        elif self.type == 'enum':
+            prom_metric.state(m.value)
+        elif self.type == 'gauge':
+            prom_metric.set(m.value)
 
 
 class Router:
@@ -164,35 +176,31 @@ m1 = Mapping(subscribe='sensors/#')
 assert m1.topic == 'sensors/#'
 assert not m1.match_topic('sensors')
 assert m1.match_topic('sensors/foo')
-assert m1.interpret('sensors/foo', '12') == [Metric('sensors_foo', {}, 12.0)]
+assert m1.interpret('sensors/foo', '12') == Metric('gauge', 'sensors_foo', {}, 12.0)
 
 m2 = Mapping(subscribe='sensors/+location/#')
 assert m2.topic == 'sensors/+/#'
 assert m2.match_topic('sensors/foo/temperature')
 assert m2.interpret('sensors/foo/temperature', '12') \
-    == [Metric('sensors_temperature', {'location': 'foo'}, 12.0)]
+    == Metric('gauge', 'sensors_temperature', {'location': 'foo'}, 12.0)
 
-m3 = Mapping(subscribe='sensors/+location/version', labels={'version': 'enum'})
+m3 = Mapping(subscribe='sensors/+location/version', metric_type='info')
 assert m3.topic == 'sensors/+/version'
 assert m3.match_topic('sensors/foo/version')
 assert not m3.match_topic('sensors/foo/version/bar')
-assert m3.interpret('sensors/foo/version', 'asdf') \
-    == [Metric('sensors_version', {'location': 'foo', 'version': 'asdf'}, 1.0)]
-assert m3.interpret('sensors/foo/version', 'qwer') \
-    == [Metric('sensors_version', {'location': 'foo', 'version': 'asdf'}, 0.0),
-        Metric('sensors_version', {'location': 'foo', 'version': 'qwer'}, 1.0)]
+assert m3.interpret('sensors/foo/version', 'asdf') == Metric('info', 'sensors_version', {'location': 'foo'}, 'asdf')
+assert m3.interpret('sensors/foo/version', 'qwer') == Metric('info', 'sensors_version', {'location': 'foo'}, 'qwer')
 
-m4 = Mapping(subscribe='bitlair/state', value_map={'open': 1.0, 'closed': 0.0})
-assert m4.interpret('bitlair/state', 'open') == [Metric('bitlair_state', {}, 1.0)]
-assert m4.interpret('bitlair/state', 'closed') == [Metric('bitlair_state', {}, 0.0)]
+m4 = Mapping(subscribe='bitlair/state', metric_type='enum', enum_states=['open', 'closed'])
+assert m4.interpret('bitlair/state', 'open') == Metric('enum', 'bitlair_state', {}, 'open')
+assert m4.interpret('bitlair/state', 'closed') == Metric('enum', 'bitlair_state', {}, 'closed')
 
-m5 = Mapping(subscribe='bitlair/pos/product', metric_type='counter', labels={'product': 'enum'})
-assert m5.interpret('bitlair/pos/product', 'Tosti') == [Metric('bitlair_pos_product', {'product': 'Tosti'}, 1.0)]
-assert m5.interpret('bitlair/pos/product', 'Tosti') == [Metric('bitlair_pos_product', {'product': 'Tosti'}, 1.0)]
+m5 = Mapping(subscribe='bitlair/pos/product', metric_type='counter', labels={'product': 'payload'})
+assert m5.interpret('bitlair/pos/product', 'Tosti') == Metric('counter', 'bitlair_pos_product', {'product': 'Tosti'}, 1.0)
+assert m5.interpret('bitlair/pos/product', 'Tosti') == Metric('counter', 'bitlair_pos_product', {'product': 'Tosti'}, 1.0)
 
 m6 = Mapping(subscribe='bitlair/snmp/tx', value_regex='^.+:(.+):.+')
-m6.interpret('bitlair/snmp/tx', '1695557017:720167:29751') \
-    == [Metric('bitlair_snmp_tx', {}, 720167.0)]
+m6.interpret('bitlair/snmp/tx', '1695557017:720167:29751') == Metric('gauge', 'bitlair_snmp_tx', {}, 720167.0)
 
 topics = lambda mm: [m.topic for m in mm]
 r1 = Router([m1, m3])
