@@ -1,0 +1,74 @@
+log_level: INFO
+
+# MQTT connection settings
+mqtt:
+  host: mqtt.local
+  port: 1883
+
+prometheus:
+  # The port on which the exporter starts the /metrics server.
+  port: 9883
+
+export:
+    # A basic catch-all subscription.
+    #
+    # The default metric type is gauge. The message is split on whitespace and the first field is
+    # interpreted as the numeric value of the metric. The metric name is based on the topic path,
+    # with all slashes replaced by underscores.
+    #
+    # Example:
+    #   > bitlair/music/space/volume 13
+    #   < bitlair_music_space_volume 13
+  - subscribe: bitlair/#
+
+    # A specialized subscription that derives a label value from the topic path.
+    #
+    # Prefixing a topic section with a '+' annotates the name of the label, any topic in messages
+    # received will be set as the label value. The part of the topic used as value will be omitted
+    # in the exported metric name.
+    #
+    # Example:
+    #   > bitlair/climate/Hoofdruimte/temperature 19 °C
+    #   < bitlair_climate_temperature{location="Hoofdruimte"} 19
+  - subscribe: bitlair/climate/+location/#
+  - subscribe: bitlair/climate/+location/dust_mass/+size
+  - subscribe: bitlair/wifi/+ssid/#
+
+    # Handle a topic that publishes known string values by setting metric_type to 'enum'.
+    #
+    # Example:
+    #   > bitlair/state open
+    #   < bitlair_state{bitlair_state="open"} 1.0
+    #   < bitlair_state{bitlair_state="closed"} 0.0
+  - subscribe: bitlair/state
+    metric_type: enum
+    enum_states: [open, closed]
+
+    # Record the number of unique string values published on a topic.
+    #
+    # Setting metric_type to 'counter' will increment by each received message. Setting a label with
+    # a value of 'payload' will use the message as label value.
+    #
+    # Example:
+    #   > bitlair/pos/product Club-Mate Winter Edition
+    #   < bitlair_pos_product_total{product="Club-Mate Winter Edition"} 1.0
+  - subscribe: bitlair/pos/product
+    metric_type: counter
+    labels:
+      product: payload
+
+    # Handle multiple metrics that are published on a single topic by subscribing twice.
+    #
+    # The metric_name parameter can be used to overwrite the exported name if the input topic is
+    # messy. A regular expression can be applied to the message to extract a (numeric) value.
+    #
+    # Example:
+    #   > bitlair/collectd/bitlair-5406/snmp/if_octets-traffic.D15 1702827978.727:1733278.79954734:57453.99160109
+    #   < bitlair_internet_tx 1733278.79954734
+    #   < bitlair_internet_rx 57453.99160109
+  - subscribe: bitlair/collectd/bitlair-5406/snmp/if_octets-traffic.D15
+    metric_name: bitlair_internet_tx
+    value_regex: "^.+:(.+):"
+  - subscribe: bitlair/collectd/bitlair-5406/snmp/if_octets-traffic.D15
+    metric_name: bitlair_internet_rx
+    value_regex: "^.+:.+:([\\d\\.]+)"
