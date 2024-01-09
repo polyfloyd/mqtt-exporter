@@ -200,7 +200,7 @@ assert m5.interpret('bitlair/pos/product', 'Tosti') == Metric('counter', 'bitlai
 assert m5.interpret('bitlair/pos/product', 'Tosti') == Metric('counter', 'bitlair_pos_product', {'product': 'Tosti'}, 1.0)
 
 m6 = Mapping(subscribe='bitlair/snmp/tx', value_regex='^.+:(.+):.+')
-m6.interpret('bitlair/snmp/tx', '1695557017:720167:29751') == Metric('gauge', 'bitlair_snmp_tx', {}, 720167.0)
+assert m6.interpret('bitlair/snmp/tx', '1695557017:720167:29751') == Metric('gauge', 'bitlair_snmp_tx', {}, 720167.0)
 
 topics = lambda mm: [m.topic for m in mm]
 r1 = Router([m1, m3])
