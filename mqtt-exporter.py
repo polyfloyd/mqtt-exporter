@@ -246,8 +246,7 @@ def main():
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(mqtt_host, mqtt_port, 60)
-    while True:
-        client.loop()
+    client.loop_forever()
 
 if __name__ == '__main__':
     main()
