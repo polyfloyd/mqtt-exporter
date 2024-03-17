@@ -7,6 +7,7 @@ from prometheus_client import Counter, Info, Gauge, Enum, start_http_server
 import logging
 import sys
 import math
+import json
 
 
 class Metric:
@@ -27,13 +28,14 @@ class Metric:
 
 class Mapping:
     def __init__(self, *, subscribe, metric_name=None, metric_type='gauge', labels={},
-                 value_regex='^(.*)$', enum_states=[], info_name='value'):
+                 value_regex=None, value_json=None, enum_states=[], info_name='value'):
         assert '#' not in subscribe or subscribe.index('#') == len(subscribe)-1
         assert metric_type in {'counter', 'enum', 'info', 'gauge', None}
         assert not ('payload' in labels.values() and metric_type in ['gauge', 'info', 'enum'])
         assert (metric_type == 'enum') == (len(enum_states) > 0)
         assert metric_type != 'info' or info_name
         assert set(labels.values()) - {'payload'} == set()
+        assert value_regex is None or value_json is None
 
         re_topic_labels = re.compile(r'\+(\w+)')
 
@@ -61,7 +63,15 @@ class Mapping:
             r = r.rstrip('#')
         self._re_match_topic = re.compile(r)
 
-        self._value_regex = re.compile(value_regex)
+        if value_regex:
+            r = re.compile(value_regex)
+            self._value_extract = lambda s: r.match(s)[1]
+        elif value_json:
+            k = value_json.lstrip('.')
+            self._value_extract = lambda s: str(json.loads(s)[k])
+        else:
+            self._value_extract = lambda s: s
+
         self._metric_name = metric_name
         self._metrics = {}
 
@@ -78,7 +88,7 @@ class Mapping:
 
         parts = topic.split('/')
 
-        payload = self._value_regex.match(payload)[1]
+        payload = self._value_extract(payload)
 
         value_mode = 'number'
         label_values = {}
@@ -201,6 +211,9 @@ assert m5.interpret('bitlair/pos/product', 'Tosti') == Metric('counter', 'bitlai
 
 m6 = Mapping(subscribe='bitlair/snmp/tx', value_regex='^.+:(.+):.+')
 assert m6.interpret('bitlair/snmp/tx', '1695557017:720167:29751') == Metric('gauge', 'bitlair_snmp_tx', {}, 720167.0)
+
+m7 = Mapping(subscribe='bitlair/power/shelly', value_json='.apower')
+assert m7.interpret('bitlair/power/shelly', '{"apower": 1337.0}') == Metric('gauge', 'bitlair_power_shelly', {}, 1337.0)
 
 topics = lambda mm: [m.topic for m in mm]
 r1 = Router([m1, m3])
