@@ -8,6 +8,12 @@ import logging
 import sys
 import math
 import json
+import subprocess
+
+
+def jq(raw_json, path):
+    o = subprocess.run(['jq', path], input=raw_json, capture_output=True)
+    return o.stdout.strip().decode('utf-8')
 
 
 class Metric:
@@ -67,8 +73,7 @@ class Mapping:
             r = re.compile(value_regex)
             self._value_extract = lambda s: r.match(s)[1]
         elif value_json:
-            k = value_json.lstrip('.')
-            self._value_extract = lambda s: str(json.loads(s)[k])
+            self._value_extract = lambda s: jq(s.encode('utf-8'), value_json)
         else:
             self._value_extract = lambda s: s
 
