@@ -235,9 +235,9 @@ def main():
 
     def on_connect(client, userdata, flags, rc):
         logging.info('mqtt connected')
-        for m in mappings:
-            logging.info('subscribing to %s' % m.topic)
-            client.subscribe(m.topic)
+        for topic in {m.topic for m in mappings}:
+            logging.info('subscribing to %s' % topic)
+            client.subscribe(topic)
 
     def on_message(client, userdata, msg):
         try:
