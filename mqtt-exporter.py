@@ -56,7 +56,7 @@ class Mapping:
         self.enum_states = enum_states
         self.info_name = info_name
 
-        r = '^' + topic.replace('+', '[^\/]+')
+        r = '^' + topic.replace('+', r'[^\/]+')
         if topic[-1] not in ['+', '#']:
             r += '$'
         else:
