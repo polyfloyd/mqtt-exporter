@@ -7,7 +7,6 @@ from prometheus_client import Counter, Info, Gauge, Enum, start_http_server
 import logging
 import sys
 import math
-import json
 import subprocess
 
 
@@ -121,7 +120,7 @@ class Mapping:
         elif value_mode == 'number':
             try:
                 set_value = float(payload.split(' ')[0].strip())
-            except:
+            except Exception:
                 logging.debug('invalid value: %s -> "%s"', topic, payload)
                 return None
         elif value_mode == 'string':
@@ -171,13 +170,11 @@ class Router:
         mappings = []
 
         prev_precedence = -math.inf
-        matched = False
         for mapping in self.mappings:
             if mapping.match_topic(topic):
                 precedence = mapping.precedence()
                 if prev_precedence > precedence:
                     break
-                matched = True
                 mappings.append(mapping)
                 prev_precedence = precedence
 
@@ -220,10 +217,9 @@ assert m6.interpret('bitlair/snmp/tx', '1695557017:720167:29751') == Metric('gau
 m7 = Mapping(subscribe='bitlair/power/shelly', value_json='.apower')
 assert m7.interpret('bitlair/power/shelly', '{"apower": 1337.0}') == Metric('gauge', 'bitlair_power_shelly', {}, 1337.0)
 
-topics = lambda mm: [m.topic for m in mm]
 r1 = Router([m1, m3])
-assert topics(r1.route('sensors/bar')) == ['sensors/#']
-assert topics(r1.route('sensors/foo/version')) == ['sensors/+/version']
+assert [m.topic for m in r1.route('sensors/bar')] == ['sensors/#']
+assert [m.topic for m in r1.route('sensors/foo/version')] == ['sensors/+/version']
 
 
 def main():
@@ -247,7 +243,7 @@ def main():
     def on_message(client, userdata, msg):
         try:
             payload = msg.payload.decode()
-        except:
+        except Exception:
             logging.debug('non utf-8 message: %s -> "%s"', msg.topic, msg.payload)
             return
         routed_mappings = router.route(msg.topic)
