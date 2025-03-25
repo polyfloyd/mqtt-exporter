@@ -1,0 +1,11 @@
+[project]
+name = "mqtt-exporter"
+version = "0.1.0"
+description = "Versatile MQTT to Prometheus glue"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "paho-mqtt==1.6.1",
+    "prometheus-client>=0.21.1",
+    "pyyaml>=6.0.2",
+]

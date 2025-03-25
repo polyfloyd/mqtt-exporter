@@ -1,2 +1,4 @@
 /.direnv
+/.ruff_cache
+/.venv
 /config.yaml
